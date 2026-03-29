@@ -1,1 +1,40 @@
+external_components:
+  - source:
+      type: local
+      path: my_components     
+    components: [ tuya_blind ]
+    refresh: 0s
+
+bk72xx:
+  board: generic-bk7231n-qfn32-tuya
+
+uart:
+  id: uart_bus
+  tx_pin: TX1
+  rx_pin: RX1
+  baud_rate: 9600
+
+cover:
+  - platform: tuya_blind
+    uart_id: uart_bus             # порт связи с процессором устройства 
+    product_id:                   # не обязательно, версия устройства
+      name: Product Identifier
+#   protocol_debug_level: ERROR  # не обязательно,публиковать лог протокола с указанным уровнем
+    refresh_position:             # не обязательно, публиковать рассчетную позицию положения, 
+      reftesh_timeout: 150ms      # с указанным периодом, не обязательно, по умолчанию 100ms
+      save_timeout: 5s            # не обязательно, сохранять в энергонезависимой памяти данные для рассчета позиции c периодом, при отсутствии параметра данные не сохраняются
+    children_lock:                # не обязательно, управление блокировкой
+       name: Lock
+    motor_reversed: false         # не обязательно, настройка реверса мотора, по умолчанию реверса нет
+    motor_speed_selector:         # не обязательно, настройка скорости вращения мотора, при отсутствии жесткой установки скорости (motor_speed) 
+       name: Motor Speed
+#   motor_speed: LOW              # не обязательно, скорость мотора, при отсутствии (motor_speed_selector) селектора скорости мотора (LOW, MIDDLE, HIGH)
+    atom_switch:                  # не обязательно, переключатель режима ATOM, при активации режима движение жалюзей просходит по 1%, пошагово. Нажатие на кнопку проворачивает двигатель на 1%
+       name: Atom Mode
+    button_limit_open:            # ОБЯЗАТЕЛЬНО !!! кнопки настройки крайних положений 
+      name: Set Open Pos
+    button_limit_close:
+      name: Set Close Pos
+    button_limits_reset:
+      name: Reset All Pos
 
