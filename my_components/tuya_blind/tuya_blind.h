@@ -39,6 +39,9 @@
 #define MY_LOGW ESP_LOGW
 #define MY_LOGI ESP_LOGI
 
+//У HA открыто 100%, закрыто 0%
+//У првода открыто 0%, закрто 100%
+
 // типы пакетов
 enum tCommand:uint8_t {HEARTBEAT=0,            //- периодический HEARTBEAT 
                        PRODUCT_QUERY=1,        //- идентификатор устройства
@@ -496,12 +499,12 @@ class TuyaBlind : public cover::Cover, public Component {
        switch (commandByte) {
          case HEARTBEAT: {
            if(receivedCommand[6]==OFF){
-              MY_LOGD(TAG,"Get first reply HEARTBEAT");
+              MY_LOGV(TAG,"Get first reply HEARTBEAT");
               heatBearTimer = esphome::millis();
               knownCommand = true;
               sendCounter=1;
            } else if(receivedCommand[6]==ON){
-              MY_LOGD(TAG,"Get every reply HEARTBEAT after %d sec",esphome::millis()/1000);
+              MY_LOGV(TAG,"Get every reply HEARTBEAT after %d sec",esphome::millis()/1000);
               heatBearTimer = esphome::millis();
               knownCommand = true;
            } else {
@@ -621,8 +624,9 @@ class TuyaBlind : public cover::Cover, public Component {
             break;
          }
          case idIssue_Percent: { // ответ на наш запрос позиционирования
-            MY_LOGD(TAG,"Confirm GOTO POSITION:%d, current: %d", data, _old_pos);
+            MY_LOGD(TAG,"Confirm GOTO POSITION:%d, current: %d", 100-data, _old_pos);
             if(data<=100){
+              data=100-data; // у устройства обратнoе направлене отсчета положения
               #ifdef TBLIND_VIRTUAL_POS
                if(get_speed()!=0 && _old_pos!=0xFF && _no_calibrate==false){ // скорость рассчитанна, старое положение есть
                   _dest_pos=data; // активация рассчета положения привода
@@ -661,6 +665,7 @@ class TuyaBlind : public cover::Cover, public Component {
             #ifdef TBLIND_VIRTUAL_POS 
                _dest_pos=0xFF; // признак достижения позиции
             #endif
+            data=100-data; //у устройства обратнoе направлене отсчета положения
             MY_LOGD(TAG,"Get POSITION:%d",data);
             temp_position = (float)data/100.0;
             #ifdef TBLIND_VIRTUAL_POS 
@@ -1052,19 +1057,19 @@ class TuyaBlind : public cover::Cover, public Component {
         // карусель обмена данными
         if(esphome::millis()-lastSend>UART_TIMEOUT && (esphome::millis()-lastRead>UART_TIMEOUT || sendRight)){ //можно отправлять
           if(sendCounter==1){ // отправим первый heatbear
-             MY_LOGD(TAG,"Send first HEARTBEAT");          
+             MY_LOGV(TAG,"Send first HEARTBEAT");          
              sendComm(HEARTBEAT); 
           } else if(sendCounter==2){
-             MY_LOGD(TAG,"Send Prod_ID request");          
+             MY_LOGV(TAG,"Send Prod_ID request");          
              sendComm(PRODUCT_QUERY);
           } else if(sendCounter==3){
-             MY_LOGD(TAG,"Send State request");          
+             MY_LOGV(TAG,"Send State request");          
              sendComm(CONF_QUERY);
           } else if(sendCounter==4){ // отправка стартового сетевого состояния
-             MY_LOGD(TAG,"Send WiFi_OK state");          
+             MY_LOGV(TAG,"Send WiFi_OK state");          
              sendNetState(getNetState());
           } else if(sendCounter==5){ // отправка стартового сетевого состояния
-             MY_LOGD(TAG,"Send DataPoint request");
+             MY_LOGV(TAG,"Send DataPoint request");
              sendComm(DATAPOINT_QUERY);
              timerGetCalibrate=esphome::millis(); // таймер таймслота определения калибровки
           } else if(sendCounter==6){ // остальной процессинг
@@ -1079,7 +1084,7 @@ class TuyaBlind : public cover::Cover, public Component {
                    sendComm(idControl, dtEnum, tenStop); // остановить   
                 } else if (_set_pos!=0xFF) {
                    MY_LOGD(TAG,"Send GOTO POSITION(2): %d",_set_pos);
-                   sendComm(idIssue_Percent, dtVal, (uint8_t)(_set_pos)); // запрос установки в позиию
+                   sendComm(idIssue_Percent, dtVal, (uint8_t)(100-_set_pos)); // у устройства обратнoе направлене отсчета положения, запрос установки в позиию
                 } else if (_set_open) {
                    MY_LOGD(TAG,"Send OPEN");
                    sendComm(idControl, dtEnum, tenOpen); // открыть   
