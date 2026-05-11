@@ -642,7 +642,7 @@ class TuyaBlind : public cover::Cover, public Component {
                _set_pos=0xFF;
                float quePos=(float)data/100.0;
                if(abs(this->position-quePos)<0.01){
-                  //temp_operation = cover::COVER_OPERATION_IDLE;
+                  temp_operation = cover::COVER_OPERATION_IDLE;
                } else if(quePos > this->position){
                   temp_operation = cover::COVER_OPERATION_OPENING;
                } else {
