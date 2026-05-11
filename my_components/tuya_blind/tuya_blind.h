@@ -233,7 +233,7 @@ class TuyaBlind : public cover::Cover, public Component {
     GPIOPin* reset_pin_{nullptr};
     int16_t reset_pin_reported_=-1;
     // флаги контроля выполнения  
-    bool _set_stop=false; // флаг команды останнова
+    bool _set_stop=false; // флаг команды останова
     bool _set_open=false;
     bool _set_close=false;
     #ifdef TBLIND_MOTOR_SPEED
@@ -251,6 +251,7 @@ class TuyaBlind : public cover::Cover, public Component {
     uint8_t _set_pos=0xFF; // запрошенная позиция в процентах !!!
     
     #ifdef TBLIND_VIRTUAL_POS
+       uint8_t _no_speed_save=0; // так контролируем перезапуск направления
        uint8_t _old_pos=0xFF; // буфер старого положения штор в процентах !!!
        uint8_t _dest_pos=0xFF; // цель позционирования в процентах !!!
        float _speed[3]={0,0,0}; // скорость позиционирования, рассчитывается
@@ -258,9 +259,11 @@ class TuyaBlind : public cover::Cover, public Component {
        uint32_t _timer_update=0; // таймер визуализации позиционирования
        float get_speed(){
           if(motor_speed<3){
-             return _speed[motor_speed];
+             float ret=_speed[motor_speed];
+             if(ret<0.0) ret=0.0;
+             return ret;
           }
-          return 0;
+          return -1;
        }
   
      #ifdef TBLIND_RESTORE // режим восстановления скоростей после отключения питания
@@ -284,7 +287,7 @@ class TuyaBlind : public cover::Cover, public Component {
              }
              if(needSave){
                 if (storage.save(&saveData) && global_preferences->sync()){ // данные успешно сохранены
-                   MY_LOGV(TAG, "Data store to flash, speed_0:%f, speed_1:%f, speed_2:%f,", saveData.speed[0],saveData.speed[1],saveData.speed[2]); 
+                   MY_LOGD(TAG, "Data store to flash, speed_0:%f, speed_1:%f, speed_2:%f,", saveData.speed[0],saveData.speed[1],saveData.speed[2]); 
                 } else {
                    MY_LOGE(TAG, "Data store to flash - ERROR !");
                 }
@@ -602,15 +605,14 @@ class TuyaBlind : public cover::Cover, public Component {
        bool ret=true;
        auto temp_operation=this->current_operation;
        auto temp_position=this->position;
-       MY_LOGD(TAG,"GET DP: 0x%02X",dpid);           
+       MY_LOGD(TAG,"GET DP: 0x%02X, data: %d", dpid, data);           
        switch (dpid) {
          case idControl: { //open, stop, close
             if(data==0){
                temp_operation = cover::COVER_OPERATION_OPENING;
                _set_open=false;
-            } else if(data==1){
+             } else if(data==1){
                temp_operation = cover::COVER_OPERATION_IDLE;
-               _set_pos=0xFF; // сбросить запрос позиционирования
                _set_stop=false;
             } else if(data==2){
                temp_operation = cover::COVER_OPERATION_CLOSING;
@@ -623,19 +625,25 @@ class TuyaBlind : public cover::Cover, public Component {
             }
             break;
          }
-         case idIssue_Percent: { // ответ на наш запрос позиционирования
+         case idIssue_Percent: { //0x9 ответ на наш запрос позиционирования, в некоторых случаях остановка
+            #ifdef TBLIND_VIRTUAL_POS
+               if(_no_speed_save<250) _no_speed_save++;
+            #endif
             MY_LOGD(TAG,"Confirm GOTO POSITION:%d, current: %d", 100-data, _old_pos);
             if(data<=100){
-              data=100-data; // у устройства обратнoе направлене отсчета положения
-              #ifdef TBLIND_VIRTUAL_POS
-               if(get_speed()!=0 && _old_pos!=0xFF && _no_calibrate==false){ // скорость рассчитанна, старое положение есть
-                  _dest_pos=data; // активация рассчета положения привода
-                  _timer_pos=esphome::millis(); //засекаем время начала позиионирования
-               }
-              #endif
+               data=100-data; // у устройства обратнoе направлене отсчета положения
+               #ifdef TBLIND_VIRTUAL_POS
+                  if(get_speed()>=0 && _old_pos!=0xFF && _no_calibrate==false){ // скорость рассчитанна, старое положение есть
+                     MY_LOGD(TAG,"Starting virtual positioning, from %d to %d", _old_pos, data);
+                     _dest_pos=data; // активация рассчета положения привода
+                     _timer_pos=esphome::millis(); //засекаем время начала позиионирования
+                  }
+               #endif
                _set_pos=0xFF;
                float quePos=(float)data/100.0;
-               if(quePos > this->position){
+               if(abs(this->position-quePos)<0.01){
+                  //temp_operation = cover::COVER_OPERATION_IDLE;
+               } else if(quePos > this->position){
                   temp_operation = cover::COVER_OPERATION_OPENING;
                } else {
                   temp_operation = cover::COVER_OPERATION_CLOSING;
@@ -645,7 +653,7 @@ class TuyaBlind : public cover::Cover, public Component {
             }
             break;
          }
-         case idCurr_Percent: { // остановка устройства в положении в %
+         case idCurr_Percent: { // 0x8 остановка устройства в положении в %
             uint32_t _now=esphome::millis();
             // наличие калибровки можно определить в момент получения данных с устройства в ответ на DataPoint request
             // а именно положение жалюзи, если устройство не калибровано, то процессор присылает
@@ -653,7 +661,7 @@ class TuyaBlind : public cover::Cover, public Component {
             // определяем наличие калибровки, если калибровка отсутствует, пришел ответ о позиции мменьше 100%,
             // активен таймер чтения признака калибровки (запускается при отправке запроса на чтение настроек устройства DataPoint request)
             // время ожидания ответа на DataPoint request не истекло
-            if(_no_calibrate && data<100 &&  _now-timerGetCalibrate<CALIBRATE_READ_TIME ){
+            if(_no_calibrate && data<100 && data!=0 /*&&  _now-timerGetCalibrate<CALIBRATE_READ_TIME*/ ){
                _no_calibrate=false;
                needReReadParams=false;
                MY_LOGD(TAG,"All limits are set");
@@ -669,29 +677,34 @@ class TuyaBlind : public cover::Cover, public Component {
             MY_LOGD(TAG,"Get POSITION:%d",data);
             temp_position = (float)data/100.0;
             #ifdef TBLIND_VIRTUAL_POS 
-            // тут рассчет скорости перемещения
-            if(_no_calibrate==false){
-               if(_old_pos!=0xFF && _timer_pos!=0){
-                  uint32_t deltatime=esphome::millis()-_timer_pos;
-                  _timer_pos=0;
-                  if(deltatime>0){
-                     float deltapos=abs((float)_old_pos-data);
-                     if(deltapos>2){
-                        float spd=get_speed(); // старая скорость
-                        float new_spd=deltapos/deltatime; // новая скорость
-                        if(abs(new_spd-spd)*(100/FACTOR_SPEED_MISS)>spd){ // если разница больше 5 части
-                            MY_LOGV(TAG,"Set new speed: %f, old: %f", new_spd, spd);
-                        } else if(spd!=new_spd){
-                            new_spd = spd*(1.0-SPEED_FILTER_COEF)+(new_spd*SPEED_FILTER_COEF); // ползущий фильтр
-                            MY_LOGV(TAG,"Core speed %f => %f", spd, new_spd);
-                        }
-                        set_speed(new_spd);
+               // тут рассчет скорости перемещения
+               if(_no_calibrate==false){ // если предыдущий пакет был такой же, то скорость не считаем
+                  if(_old_pos!=0xFF && _timer_pos!=0){
+                     uint32_t deltatime=esphome::millis()-_timer_pos;
+                     _timer_pos=0;
+                     if(deltatime>0 && _no_speed_save==1){
+                        float deltapos=abs((float)_old_pos-data);
+                        if(deltapos>2){
+                           float spd=get_speed(); // старая скорость
+                           float new_spd=deltapos/deltatime; // новая скорость
+                           if(abs(new_spd-spd)*(100/FACTOR_SPEED_MISS)>spd){ // если разница больше 5 части
+                               MY_LOGD(TAG,"Set new speed: %f, old: %f", new_spd, spd);
+                           } else if(spd!=new_spd){
+                               new_spd = spd*(1.0-SPEED_FILTER_COEF)+(new_spd*SPEED_FILTER_COEF); // ползущий фильтр
+                               MY_LOGD(TAG,"Core speed %f => %f", spd, new_spd);
+                           }
+                           set_speed(new_spd);
+                        }    
+                     } else {
+                        MY_LOGD(TAG,"Speed calculation reset");   
                      }
                   }
-               }
-            } else if(_now>=CALIBRATE_READ_TIME){
-               set_speed(0);
-            }                
+               } else if(_now>=CALIBRATE_READ_TIME){
+                  set_speed(0);
+               } else {
+                  MY_LOGD(TAG,"Device not calibrate"); 
+               }                   
+               _no_speed_save=0;
             #endif
             temp_operation = cover::COVER_OPERATION_IDLE;
             _old_pos=data;
@@ -867,14 +880,19 @@ class TuyaBlind : public cover::Cover, public Component {
  protected:
 
     void control(const cover::CoverCall &call) override {
+       if (call.get_stop()) { //запрос остановки 
+          if(this->current_operation!=cover::COVER_OPERATION_IDLE){
+             _set_stop=true; 
+          }
+          _set_pos=0xFF;
+       }
        if (call.get_position().has_value()) { // получили запрос нового положения
           float target = *call.get_position(); 
           _set_pos=(uint8_t)(100*target);
        }
-       if (call.get_stop()) {
-          _set_stop=true;   
-       }
-       this->publish_state();
+       #ifndef TBLIND_VIRTUAL_POS
+         this->publish_state();
+       #endif
     }
 
  public:
@@ -1037,23 +1055,28 @@ class TuyaBlind : public cover::Cover, public Component {
         // рассчет текущего положения во время позиционирования
         if(_no_calibrate==false && _dest_pos!=0xFF){
            uint32_t _now=esphome::millis();
+           bool pub=false;
            if(_now-_timer_update>=TBLIND_VIRTUAL_POS){
               _timer_update=_now;
               float calc_pos=(float)get_speed()*(_now-_timer_pos); // пройденный путь
               if(_old_pos<_dest_pos){ // закрывается
-                 calc_pos=calc_pos+_old_pos;   
+                 calc_pos=calc_pos+_old_pos;
+                 pub=calc_pos < _dest_pos;
               } else { // открывается
                  calc_pos=-calc_pos+_old_pos;
+                 pub=calc_pos > _dest_pos;
               }
-              if(calc_pos<=100.0 && calc_pos>=0.0){ // фильтрация бреда
-                 this->position = calc_pos/100.0;
-                 MY_LOGD(TAG,"New calculated position:%f",this->position);
-                 this->publish_state();
+              if(calc_pos<=100.0 && calc_pos>=0.0 && pub){ // фильтрация бреда
+                 float new_pos=calc_pos/100.0; 
+                 if(abs(this->position-new_pos) >= 0.01){                 
+                    this->position = new_pos; 
+                    MY_LOGD(TAG,"New calculated position:%f, speed: %f",this->position, (float)get_speed());
+                    this->publish_state();
+                 }
               }
            }
         }
       #endif  
-      
         // карусель обмена данными
         if(esphome::millis()-lastSend>UART_TIMEOUT && (esphome::millis()-lastRead>UART_TIMEOUT || sendRight)){ //можно отправлять
           if(sendCounter==1){ // отправим первый heatbear
@@ -1079,12 +1102,17 @@ class TuyaBlind : public cover::Cover, public Component {
                 MY_LOGD(TAG,"Repeat send DataPoint request, for calibrate read");                
              } else if(esphome::millis()-lastSend>SEND_TIMEOUT){
                 static uint32_t lastSendPing=esphome::millis();
-                if(_set_stop ){
-                   MY_LOGD(TAG,"Send STOP(2)");
-                   sendComm(idControl, dtEnum, tenStop); // остановить   
+                if(_set_stop){
+                   if(this->current_operation==cover::COVER_OPERATION_IDLE){
+                      MY_LOGD(TAG,"Clear STOP command");
+                      _set_stop=false; 
+                   } else {
+                      MY_LOGD(TAG,"Send STOP");
+                      sendComm(idControl, dtEnum, tenStop); // остановить 
+                   }
                 } else if (_set_pos!=0xFF) {
-                   MY_LOGD(TAG,"Send GOTO POSITION(2): %d",_set_pos);
-                   sendComm(idIssue_Percent, dtVal, (uint8_t)(100-_set_pos)); // у устройства обратнoе направлене отсчета положения, запрос установки в позиию
+                   MY_LOGD(TAG,"Send GOTO POSITION: %d",_set_pos);
+                   sendComm(idIssue_Percent, dtVal, 100-_set_pos); // у устройства обратнoе направлене отсчета положения, запрос установки в позиию
                 } else if (_set_open) {
                    MY_LOGD(TAG,"Send OPEN");
                    sendComm(idControl, dtEnum, tenOpen); // открыть   
@@ -1106,7 +1134,15 @@ class TuyaBlind : public cover::Cover, public Component {
               #endif
                 } else if (limit_comm!=tliUndef) { //  команда установки лимитов
                    MY_LOGD(TAG,"Send LIMIT COMMAND: %d", limit_comm); 
-                   sendComm(idSet_Limits, dtEnum, (uint8_t)limit_comm); 
+                   sendComm(idSet_Limits, dtEnum, (uint8_t)limit_comm);
+                   #ifdef TBLIND_VIRTUAL_POS
+                      for(uint8_t i=0; i<3; i++){
+                         _speed[i]=0.0; // обнуление настроек скорости
+                      }
+                      #ifdef TBLIND_RESTORE
+                         saveDataFlash();  
+                      #endif
+                   #endif
                 } else if(esphome::millis()-lastSendPing>HEARTBEAT_INTERVAL*1000){
                    MY_LOGV(TAG,"Send regular HEARTBEAT");          
                    sendComm(HEARTBEAT);
