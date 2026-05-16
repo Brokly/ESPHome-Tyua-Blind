@@ -637,18 +637,19 @@ class TuyaBlind : public cover::Cover, public Component {
                #ifdef TBLIND_VIRTUAL_POS
                   if(get_speed()>=0 && _old_pos!=0xFF && _no_calibrate==false){ // скорость рассчитанна, старое положение есть
                      MY_LOGD(TAG,"Starting virtual positioning, from %d to %d", _old_pos, data);
+                     _old_pos=this->position*100;
                      _dest_pos=data; // активация рассчета положения привода
                      _timer_pos=esphome::millis(); //засекаем время начала позиионирования
                   }
                #endif
                _set_pos=0xFF;
-               float quePos=(float)data/100.0;
-               if(abs(this->position-quePos)<0.009){
-                  temp_operation = cover::COVER_OPERATION_IDLE;
-               } else if(quePos > this->position){
+               uint8_t testPos=round(this->position*100.0);
+               if(data > testPos){
                   temp_operation = cover::COVER_OPERATION_OPENING;
-               } else {
+               } else if(data < testPos){
                   temp_operation = cover::COVER_OPERATION_CLOSING;
+               } else {
+                  temp_operation = cover::COVER_OPERATION_IDLE;
                }
             } else {
                break;
@@ -1055,27 +1056,40 @@ class TuyaBlind : public cover::Cover, public Component {
             }
         #endif
         // рассчет текущего положения во время позиционирования
-        if(_no_calibrate==false && this->current_operation!=cover::COVER_OPERATION_IDLE){
-           uint32_t _now=esphome::millis();
-           bool pub=false;
-           if(_now-_timer_update>=TBLIND_VIRTUAL_POS){
-              _timer_update=_now;
-              float calc_pos=(float)get_speed()*(_now-_timer_pos); // пройденный путь
-              if(_old_pos<_dest_pos){ // закрывается
-                 calc_pos=calc_pos+_old_pos;
-                 pub=calc_pos < _dest_pos;
-              } else { // открывается
-                 calc_pos=-calc_pos+_old_pos;
-                 pub=calc_pos > _dest_pos;
-              }
-              if(calc_pos<=100.0 && calc_pos>=0.0 && pub){ // фильтрация бреда
-                 float new_pos=calc_pos/100.0; 
-                 if(abs(this->position-new_pos) >= 0.01){                 
-                    this->position = new_pos; 
-                    MY_LOGD(TAG,"New calculated position:%f, speed: %f",this->position, (float)get_speed());
-                    this->publish_state();
+        if(_no_calibrate==false){
+           if(this->current_operation!=cover::COVER_OPERATION_IDLE){
+              uint32_t _now=esphome::millis();
+              bool pub=false;
+              if(_now-_timer_update>=TBLIND_VIRTUAL_POS){
+                 _timer_update=_now;
+                 float calc_pos=(float)get_speed()*(_now-_timer_pos); // пройденный путь
+                 if(_old_pos<_dest_pos){ // закрывается
+                    calc_pos=calc_pos+_old_pos;
+                    pub=calc_pos < _dest_pos;
+                 } else { // открывается
+                    calc_pos=-calc_pos+_old_pos;
+                    pub=calc_pos > _dest_pos;
+                 }
+                 calc_pos=round(calc_pos);
+                 if(calc_pos<=100.0 && calc_pos>=0.0 && pub){ // фильтрация бреда
+                    float new_pos=calc_pos/100.0;
+                    if(this->position != new_pos){                 
+                       this->position = new_pos; 
+                       MY_LOGD(TAG,"New calculated position:%f, speed: %f",this->position, (float)get_speed());
+                       this->publish_state();
+                    }
                  }
               }
+           } else {
+              /*
+              if(this->position<0.01){
+                 this->position=0; 
+                 this->publish_state();                 
+              } else if(this->position>0.99){
+                 this->position=1.0;
+                 this->publish_state();                 
+              }
+              */
            }
         }
       #endif  
