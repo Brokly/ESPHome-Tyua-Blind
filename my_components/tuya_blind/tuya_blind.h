@@ -628,8 +628,10 @@ class TuyaBlind : public cover::Cover, public Component {
          case idIssue_Percent: { //0x9 ответ на наш запрос позиционирования, в некоторых случаях остановка
             #ifdef TBLIND_VIRTUAL_POS
                if(_no_speed_save<250) _no_speed_save++;
+               MY_LOGD(TAG,"Confirm GOTO POSITION:%d, current: %d", 100-data, _old_pos);
+            #else
+               MY_LOGD(TAG,"Confirm GOTO POSITION:%d", 100-data);
             #endif
-            MY_LOGD(TAG,"Confirm GOTO POSITION:%d, current: %d", 100-data, _old_pos);
             if(data<=100){
                data=100-data; // у устройства обратнoе направлене отсчета положения
                #ifdef TBLIND_VIRTUAL_POS
@@ -641,7 +643,7 @@ class TuyaBlind : public cover::Cover, public Component {
                #endif
                _set_pos=0xFF;
                float quePos=(float)data/100.0;
-               if(abs(this->position-quePos)<0.01){
+               if(abs(this->position-quePos)<0.009){
                   temp_operation = cover::COVER_OPERATION_IDLE;
                } else if(quePos > this->position){
                   temp_operation = cover::COVER_OPERATION_OPENING;
@@ -663,6 +665,9 @@ class TuyaBlind : public cover::Cover, public Component {
             // время ожидания ответа на DataPoint request не истекло
             if(_no_calibrate && data<100 && data!=0 /*&&  _now-timerGetCalibrate<CALIBRATE_READ_TIME*/ ){
                _no_calibrate=false;
+               #ifdef TBLIND_VIRTUAL_POS
+                  _old_pos=100-data;
+               #endif
                needReReadParams=false;
                MY_LOGD(TAG,"All limits are set");
             }
@@ -670,19 +675,16 @@ class TuyaBlind : public cover::Cover, public Component {
             _set_stop=false;
             _set_close=false;
             _set_pos=0xFF;
-            #ifdef TBLIND_VIRTUAL_POS 
-               _dest_pos=0xFF; // признак достижения позиции
-            #endif
             data=100-data; //у устройства обратнoе направлене отсчета положения
             MY_LOGD(TAG,"Get POSITION:%d",data);
             temp_position = (float)data/100.0;
             #ifdef TBLIND_VIRTUAL_POS 
                // тут рассчет скорости перемещения
-               if(_no_calibrate==false){ // если предыдущий пакет был такой же, то скорость не считаем
+               if(_no_calibrate==false){ 
                   if(_old_pos!=0xFF && _timer_pos!=0){
                      uint32_t deltatime=esphome::millis()-_timer_pos;
                      _timer_pos=0;
-                     if(deltatime>0 && _no_speed_save==1){
+                     if(deltatime>0 && _no_speed_save==1){ // если предыдущий пакет был такой же, то скорость не считаем
                         float deltapos=abs((float)_old_pos-data);
                         if(deltapos>2){
                            float spd=get_speed(); // старая скорость
@@ -705,9 +707,9 @@ class TuyaBlind : public cover::Cover, public Component {
                   MY_LOGD(TAG,"Device not calibrate"); 
                }                   
                _no_speed_save=0;
+               _old_pos=data;
             #endif
             temp_operation = cover::COVER_OPERATION_IDLE;
-            _old_pos=data;
             break;
          }
          case idDir: { // настройка направления вращения мотора
@@ -1053,7 +1055,7 @@ class TuyaBlind : public cover::Cover, public Component {
             }
         #endif
         // рассчет текущего положения во время позиционирования
-        if(_no_calibrate==false && _dest_pos!=0xFF){
+        if(_no_calibrate==false && this->current_operation!=cover::COVER_OPERATION_IDLE){
            uint32_t _now=esphome::millis();
            bool pub=false;
            if(_now-_timer_update>=TBLIND_VIRTUAL_POS){
